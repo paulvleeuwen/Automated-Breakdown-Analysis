@@ -1,0 +1,69 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{E60BDF39-8127-4B3B-977C-2F73220FD81F}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ConsoleApp4</RootNamespace>
+    <AssemblyName>ConsoleApp4</AssemblyName>
+    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="NReco.PivotData, Version=1.3.8.0, Culture=neutral, PublicKeyToken=9ad162d4af1a824f, processorArchitecture=MSIL">
+      <HintPath>..\packages\NReco.PivotData.1.3.8\lib\net45\NReco.PivotData.dll</HintPath>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Xml" />
+    <Reference Include="wecr.dwh.engine.etl">
+      <HintPath>..\..\..\..\..\..\UserData\GIT\SSIS\engines-console\wecr.dwh.consoleapp\bin\Debug\wecr.dwh.engine.etl.dll</HintPath>
+    </Reference>
+    <Reference Include="wecr.dwh.engine.rules">
+      <HintPath>..\..\..\..\..\..\UserData\GIT\SSIS\engines-console\wecr.dwh.consoleapp\bin\Debug\wecr.dwh.engine.rules.dll</HintPath>
+    </Reference>
+    <Reference Include="wecr.dwh.metadata.domain">
+      <HintPath>..\..\..\..\..\..\UserData\GIT\SSIS\engines-console\wecr.dwh.consoleapp\bin\Debug\wecr.dwh.metadata.domain.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="DataSetDBExtensions.cs" />
+    <Compile Include="EntityExtensions.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="RuleExtension.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+    <None Include="packages.config" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
