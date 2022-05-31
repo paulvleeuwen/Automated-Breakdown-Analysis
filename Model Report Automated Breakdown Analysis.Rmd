@@ -1,0 +1,740 @@
+---
+title: Automated Breakdown Analysis
+subtitle: A case study of the cost price of French fries potatoes
+author: 
+  - Jamal Roskam^[Wageningen Economic Research, \href{mailto:jamal.roskam@wur.nl}{jamal.roskam@wur.nl}]
+  - Paul van Leeuwen^[Wageningen Economic Research, \href{mailto:paul2.vanleeuwen@wur.nl}{paul2.vanleeuwen@wur.nl}]
+date: '3 June 2021'
+fontsize: 11pt
+output:
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: no
+    toc_depth: 2
+abstract:
+  \newpage
+number_sections: yes
+toc: yes
+geometry: margin = 2cm
+always_allow_html: yes
+header-includes:
+  - \usepackage{todonotes}
+  - \usepackage{bm}
+  - \usepackage{mathtools}
+  - \usepackage{amsmath}
+  - \usepackage{amsfonts}
+  - \usepackage{pdflscape}
+  - \usepackage{booktabs}
+  - \newcommand{\blandscape}{\begin{landscape}}
+  - \newcommand{\elandscape}{\end{landscape}}
+  - \usepackage{booktabs}
+  - \usepackage[official]{eurosym}
+  - \usepackage{floatrow}
+  - \usepackage{booktabs}
+  - \floatsetup[figure]{capposition=top}
+---
+
+```{r setup, include = FALSE, echo = FALSE, message = FALSE, warning = TRUE}
+
+# Settings for the R-markdown file.
+knitr::opts_chunk$set(echo = FALSE, dev = 'pdf')
+ixGraphicalDevices <- dev.list()['RStudioGD']
+if (!is.null(ixGraphicalDevices)) {
+  dev.off()
+}
+rm(list = ls())
+
+# Libraries for this report only.
+library(tinytex)
+library(knitr)
+library(kableExtra)
+library(latex2exp)
+library(Hmisc)
+library(tidyverse)
+library(reshape2)
+library(lubridate)
+library(cowplot)
+library(plotly)
+library(webshot)
+library(plot3D)
+library(MASS) # for the simulation of the variance decomposition
+library(lubridate)
+
+options(knitr.kable.NA = '-')
+knit_hooks$set(
+  inline = function(x) {
+    if (!is.numeric(x)) {
+      x
+    } else{
+      formatC(x, big.mark = ',', format = 'f', drop0trailing = TRUE)
+    }
+  }
+)
+set.seed(2)
+nSamples <- 1e3
+percentageConfidenceInterval <- 95
+zScore <- qnorm(1 - (1 - percentageConfidenceInterval / 100) / 2)
+```
+
+
+
+\newpage\section{Introduction}
+\todo{\tiny @Jamal, wil jij hier iets over schrijven?}
+
+
+\newpage\section{Methodology}
+
+We describe three approaches to analyse an arbitrary time series: analysis of change, sensitivity analysis, and variance decomposition analysis.
+
+
+\subsection{Analysis of Change}\label{sec:aoc}
+
+```{r}
+nObservations <- 10
+revenue <- exp(rnorm(nObservations)) + 10
+costs <- exp(rnorm(nObservations))
+fhIncome <- function(inRevenue, inCosts)
+  inRevenue - inCosts
+fhIncomePerAwu <- function(inIncome, inAwu)
+  inIncome / inAwu
+awu <- 1 + 2 / (1 + exp(rnorm(nObservations)))
+dataObserved <- data.frame(
+  year = seq(to = year(Sys.Date()), length.out = nObservations),
+  income = fhIncome(revenue, costs),
+  revenue = revenue,
+  costs = costs,
+  awu = awu,
+  check.names = FALSE
+) %>% mutate(`income per awu` = fhIncomePerAwu(income, awu)) %>% 
+  mutate(across(
+  .cols = !year,
+  .fns = ~ .x - lag(.x),
+  .names = '{.col}Delta'
+))
+dataMelted <-
+  dataObserved %>%
+  dplyr::select(year, income, revenue, costs) %>%
+  reshape2::melt(id.vars = 'year') %>%
+  group_by(variable) %>%
+  mutate(delta = value - lag(value))
+```
+
+Given a time series variable $\bm{y} \in \mathbb{R}^T$ to be studied and defined as the dependent variable.
+$\bm{y}$ is the result of a mapping from $m \geq 1$ other variables that are gathered in the matrix $\bm{X} \in \mathbb{R}^{T m}$ with $T \geq 1$ and  $\bm{X} = ( \bm{x}_1 \quad \cdots \quad \bm{x}_m)^\prime$ where $\bm{x}_j$ is the $j^\text{th}$ column of $\bm{X}$.
+The mapping $f \colon \mathbb{R}^m \mapsto \mathbb{R}$ is defined as $\bm{y}_t = f(x_1, \ldots, x_m)$ where $t = 1, \ldots, T$ and $j = 1, \ldots, m$ unless indicated otherwise.
+
+\quad
+\fbox{
+ \begin{minipage}{\dimexpr\textwidth-4\fboxsep-2\fboxrule\relax}
+  \textbf{Example} \\
+Suppose $\bm y$ is the average annual income of a farmer over a period of $T$ years.
+$\bm y$ is constructed as $\bm{y}_t = f( \bm{r}_t, \bm{c}_t ) = \bm{r}_t - \bm{c}_t$ with $\bm{X} = (\bm{r} \quad \bm{c})$, $\bm{r} \in \mathbb{R}_+^T$ the revenue, and $\bm{c} \in \mathbb{R}_+^T$ the costs.
+Furthermore, let $T = `r nObservations`$, $\ln \bm{r}_t \sim \mathcal{N}(10, 1)$, and $\ln \bm{r}_t \sim \mathcal{N}(0, 1)$.
+See Figure \ref{fig:decomposition_example} for a visualisation of the income and its decomposition into revenue and costs.
+ \end{minipage}
+} \ \
+
+```{r fig.cap = paste0('\\label{fig:decomposition_example}\\small Visualisation of the income and its decomposition into revenue and costs for the period ', min(dataObserved$year), ' - ', max(dataObserved$year), '.')}
+fhDecompositionExample <- ggplot(dataMelted, aes(x = year, y = value, colour = variable)) + geom_line(size = 1) + geom_point() + scale_x_continuous(breaks = unique(dataMelted$year)) + theme_bw()
+print(fhDecompositionExample)
+```
+
+
+\subsubsection{Change With Respect to Smallest Time Granularity}\label{sec:change_time_discrete}
+
+The change in $\bm y$ over the periods can be explained by the change in the underlying variables $\bm{x}_1, \ldots, \bm{x}_m$ over the same period.
+More mathematically, for $T \geq 2$ let the change in $\bm y$ from period $t - 1$ to period $t$ be denoted by
+\[
+\Delta( \bm{y}_t ) = \bm{y}_t - \bm{y}_{t - 1},
+\quad
+t = 2, \ldots, n
+\]
+Then $\Delta( \bm{y}_t )$ is explained by a change in $\bm{x}_j$ from period $t - 1$ to period $t$ as
+\begin{equation}\label{eq:nabla_tilde}
+\tilde{\nabla}_{tj}
+= 
+\begin{dcases*}
+0 & when $\Delta( \bm{y}_t ) = 0$
+\\
+\frac{ \bm{y}_t - f( \bm{X}_{t1} \ldots, \bm{X}_{t, j-1}, \bm{X}_{t - 1, j}, \bm{X}_{t, j+1}, \ldots, \bm{X}_{tm} ) }{ \Delta( \bm{y}_t ) }
+& when $\Delta( \bm{y}_t ) \neq 0$
+\end{dcases*}
+\end{equation}
+with $\bm{X}_{tj}$ the element of $\bm X$ in row $t$ and column $j$.
+In other words, for variable $\bm{x}_j$ only the $t^\text{th}$ observation $\bm{X}_{tj}$ is replaced by its one-period lagged version $\bm{X}_{t - 1, j}$.
+$\tilde{\nabla}_{tj}$ is defined as zero when $\Delta( \bm{y}_t )$ is zero because there is no change in $\bm y$ from period $t - 1$ to period $t$.
+Hence, the change from $\bm{y}_{t-1}$ to $\bm{y}_t$ cannot be related to a change of $\bm{X}_{t-1,j}$ to $\bm{X}_{tj}$ by only considering $\bm{y}_{t-1}$, $\bm{y}_t$, $\bm{X}_{t-1,j}$, $\bm{X}_{tj}$, and the mapping $f$.\footnote{Note that a non-zero change of $\bm{X}_{t-1,j}$ to $\bm{X}_{tj}$ could lead to $\Delta( \bm{y}_t ) = 0$ but that requires an analysis of the mapping $f$ and not just Equation \eqref{eq:nabla_tilde}. For example, when $f(x_1, x_2) = x_1 - x_2$ and $x_1 = x_2$ for all periods we have $\Delta( \bm{y}_t ) = 0$ although $x_1$ and $x_2$ are not necessarily zero. The use of the derivative of $f$ with respect to the underlying variables is described below.}
+
+To enable comparison of the importance of a change in one of the underlying variables $\bm{x}_1, \ldots, \bm{x}_m$ over time, the $\tilde{\nabla}_{tj}$ need to be positive and they add up to a constant value. 
+Without loss of generality, we require the $\tilde{\nabla}_{tj}$ to add up to one.
+
+Only when $f$ is an affine combination of $\bm{x}_1, \ldots, \bm{x}_m$ and $\Delta( \bm{y}_t ) \neq 0$ the $\tilde{\nabla}_{tj}$ add up to one.
+This is shown as follows.
+Let $f$ be defined as
+\begin{equation}\label{eq:f_affine}
+f(x_1, \ldots, x_m) = a + \sum_{j=1}^m b_j x_j,
+\quad
+a \in \mathbb{R}
+\quad \text{and} \quad
+b_j \in \mathbb{R}
+\end{equation}
+Then
+\[
+\tilde{\nabla}_{tj}
+= \frac{ a + \sum\limits_{k=1}^m b_k \bm{X}_{tk} - \left( b_j \bm{X}_{t-1,j} + a + \sum\limits_{k=1, k \neq j}^m b_k \bm{X}_{tk} \right) }{ \Delta( \bm{y}_t ) }
+= b_j  \frac{ \bm{X}_{tj} - \bm{X}_{t-1,j} }{ \Delta( \bm{y}_t ) }
+\]
+resulting in
+\[
+\sum_{j=1}^m \tilde{\nabla}_{tj}
+= \frac{ a + \sum_{j=1}^m b_j \bm{X}_{tj} - a - \sum_{j=1}^m b_j \bm{X}_{t-1,j} }{ \Delta( \bm{y}_t ) }
+= \frac{ \Delta( \bm{y}_t ) }{ \Delta( \bm{y}_t ) }
+= 1
+\]
+When, in addition, the sign of all $b_j$ is equal to the sign of $\Delta( \bm{y}_t )$ the $\tilde{\nabla}_{tj}$ are non-negative and therefore $0 \leq \tilde{\nabla}_{tj} \leq 1$.
+
+When $f$ is not an affine combination of $\bm{x}_1, \ldots, \bm{x}_m$ while $\Delta( \bm{y}_t ) \neq 0$ the $\tilde{\nabla}_{tj}$ do not add up to one and therefore the $\tilde{\nabla}_{tj}$ need to be normalised:
+\begin{equation}\label{eq:nabla}
+\nabla_{tj} 
+= 
+\begin{dcases*}
+0 & when $\tilde{\nabla}_{tj} = 0$ for all $j \in \{1, \ldots, m\}$ \\
+\frac{ \left| \tilde{\nabla}_{tj} \right| }{ \sum_{j=1}^m \left| \tilde{\nabla}_{tj} \right| } & when $\tilde{\nabla}_{tj} \neq 0$ for at least one $j \in \{1, \ldots, m\}$
+\end{dcases*}
+\end{equation}
+where the absolute value of each $\tilde{\nabla}_{tj}$ is taken to ensure the impact of the change in $\bm{x}_j$ is not cancelled out.
+
+Note that, in general, $\nabla_{tj}$ does not explain the fraction of $\Delta( \bm{y}_t )$.
+More specifically, they show the impact on the change of $\bm{y}_t$ due to a change in one of its underlying variables.
+Alos note that $\nabla_{tj}$ only explains the fraction of $\Delta( \bm{y}_t )$ when $\tilde{\nabla}_{tj} = \Delta( \bm{y}_t )$.
+
+```{r}
+varNamesUnderlying <- setdiff( unique(dataMelted$variable), 'income' )
+changeIncomeExplainedByRevenuNotNormalised <-
+  (fhIncome(revenue, costs) - fhIncome(lag(revenue), costs)) / dataMelted %>% filter(variable == 'income') %>% pull(delta)
+changeIncomeExplainedByCostsNotNormalised <-
+  (fhIncome(revenue, costs) - fhIncome(revenue, lag(costs))) / dataMelted %>% filter(variable == 'income') %>% pull(delta)
+dataObserved$changeIncomeExplainedByRevenu <-
+  abs(changeIncomeExplainedByRevenuNotNormalised) / (
+    abs(changeIncomeExplainedByRevenuNotNormalised) + abs(changeIncomeExplainedByCostsNotNormalised)
+  )
+dataObserved$changeIncomeExplainedByCosts <-
+  abs(changeIncomeExplainedByCostsNotNormalised) / (
+    abs(changeIncomeExplainedByRevenuNotNormalised) + abs(changeIncomeExplainedByCostsNotNormalised)
+  )
+dataObservedMaxYear <- dataObserved %>% slice_max(abs(incomeDelta))
+```
+
+\quad
+\fbox{
+ \begin{minipage}{\dimexpr\textwidth-4\fboxsep-2\fboxrule\relax}
+  \textbf{Example (continued)} \\
+In the example above we see a maximal change in income of `r formatC(dataObservedMaxYear$tncomeDelta, digits = 2, format = 'f')` in `r as.character(dataObservedMaxYear$year)`.
+Of that change `r formatC( 100 * dataObservedMaxYear$changeIncomeExplainedByRevenu, digits = 2, format = 'f' )`\% is explained by a change in revenue (`r formatC( dataObservedMaxYear$revenueDelta, digits = 2, format = 'f', flag = '+' )`) and `r formatC( 100 * dataObservedMaxYear$changeIncomeExplainedByCosts, digits = 2, format = 'f' )`\%  by a change in costs (`r formatC( dataObservedMaxYear$costsDelta, digits = 2, format = 'f', flag = '+' )`).
+The decrease in costs is larger than the increase in revenue, hence the most relevant change is in the costs.
+In this manner an arbitrary function can be analysed with respect to its underlying variables $\bm{x}_1, \ldots, \bm{x}_m$ as shown in Equations \eqref{eq:nabla_tilde} and \eqref{eq:nabla}. 
+Figure \ref{fig:decomposition_example} extended with the analysis of this section is shown in Figure \ref{fig:decomposition_example_impact}.
+For the sake of convenience, Figure \ref{fig:decomposition_example} is shown again.
+ \end{minipage}
+} \ \
+
+```{r fig.height = 6, fig.cap = paste0('\\label{fig:decomposition_example_impact}\\small Visualisation of the income and its decomposition into revenue and costs (upper panel) and a visualisation of the impact of a change in revenue and costs with respect to income (lower panel). Both panels are for the time window ', min(dataObserved$year), ' - ', max(dataObserved$year), '. Note that the first year is omitted in the lower panel as change can only be calculated from the second year on. Impact is $\\nabla_{tj}$ from Equation \\eqref{eq:nabla}.')}
+dataPlotImpact <- dataObserved %>% mutate(year = factor(year), revenue = changeIncomeExplainedByRevenu, costs = changeIncomeExplainedByCosts) %>% melt(id.vars = 'year', measure.vars = c('revenue', 'costs'), value.name = 'impact')
+thisColours <- unique(ggplot_build(fhDecompositionExample)$data[[1]]$colour)
+fhDecompositionExampleImpact <- ggplot(dataPlotImpact, aes(x = year, y = impact, fill = variable)) + geom_bar(position = 'fill', stat = 'identity') +  scale_y_continuous(labels = scales::percent_format()) + ylab('impact') + scale_fill_manual('variable', values = c('revenue' = thisColours[2], 'costs' = thisColours[3])) + theme_bw()
+suppressWarnings(plot_grid(fhDecompositionExample + theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank()), fhDecompositionExampleImpact, ncol = 1, align = 'v')) # to omit the warning that 2 rows are removed as the first year has no value
+```
+
+
+\subsubsection{(Experimental) Alternative derivation: Taylor approximation}
+
+The Taylor approximation of an $n$-times differentiable function $g \colon \mathbb{R} \mapsto \mathbb{R}$ at $x = x_0$ could be expressed as 
+\[
+g(x) = \frac{ (x - x_0)^n }{n!} \left. g^{(n)}(x) \right|_{x = x_0} + \sum_{k=0}^{n-1} \frac{ (x - x_0)^k }{k!} \left. g^{(k)}(x) \right|_{x = x_0}
+\]
+for some $\xi \in ]x, x_0[$.
+Let $x = \bm{X}_{tj}$ for variable $j$ to be analysed, $x_0 = \bm{X}_{t - 1,j}$, and $\Delta = \bm{X}_{tj} - \bm{X}_{t - 1,j}$.
+Subtracting $g(x_0) = g \left( \bm{X}_{j, t-1} \right)$ from both sides leads to
+\begin{equation}\label{eq:taylor}
+\tilde{\nabla}_{tj}
+=
+g \left( \bm{X}_{j,t} \right) - g \left( \bm{X}_{j, t-1} \right)
+=
+\frac{ \Delta^n }{n!} \left. g^{(n)}(x) \right|_{x = \xi} + \sum_{k=1}^{n-1} \frac{ \Delta^k }{k!} \left. g^{(k)}(x) \right|_{x = \bm{X}_{j, t-1}}
+\end{equation}
+In other words, a change from $\bm{X}_{j, t-1}$ to $\bm{X}_{jt}$ causes a change from $g \left( \bm{X}_{j,t-1} \right)$ to $g \left( \bm{X}_{jt} \right)$.
+The latter change is calculated by the right-hand side of Equation \eqref{eq:taylor}.
+
+To assess the impact of a change from $\bm{X}_{j,t-1}$ to $\bm{X}_{jt}$ on the change from $g \left( \bm{X}_{j,t-1} \right)$ to $g \left( \bm{X}_{jt} \right)$, we need to divide $g \left( \bm{X}_{jt} \right) - g \left( \bm{X}_{j,t-1} \right)$ by $\bm{X}_{jt} - \bm{X}_{j,t-1}$, i.e.
+\[
+\tilde{\nabla}_{tj} 
+=
+\frac{ g \left( \bm{X}_{jt} \right) - g \left( \bm{X}_{j,t-1} \right) }{ \bm{X}_{jt} - \bm{X}_{j,t-1} }
+\]
+
+\quad
+\fbox{
+ \begin{minipage}{\dimexpr\textwidth-4\fboxsep-2\fboxrule\relax}
+  \textbf{Example} \\
+  Suppose $f(x_1, x_2) = x_1 + x_2$.
+  Then the first derivative is one for both $x_1$ and $x_2$.
+  The second derivative of $f$ and beyond evaluates to zero.
+  Then, for $j = 1, 2$, Equation \eqref{eq:taylor} evaluates to 
+  \[
+  \tilde{\nabla}_{t,1} = \bm{X}_{t,1} - \bm{X}_{t - 1,1}
+  \quad \text{and} \quad
+  \tilde{\nabla}_{t,2} = \bm{X}_{t,2} - \bm{X}_{t - 1,2}
+  \]
+  Intuitively, this decomposition is appealing as the sum over all $\tilde{\nabla}_{tj}$ for all $j$ leads to
+  \[
+  \sum_{j=1}^m \tilde{\nabla}_{tj} = \Delta(\bm{y}_t)
+  \]
+ \end{minipage}
+} \ \
+
+For a function $f$ that is different than a polynomial function with non-negative powers the Taylor approximation may lead to an exploding error term $\frac{ \Delta^n }{n!} g^{(n)}(\xi)$.
+\todo{\small Vind een functie die aan de axiomen voldoet: geen verandering in x is nabla gelijk aan 0 en alle nabla tellen op tot 1 en zijn niet-negatief.}
+
+
+\subsection{Sensitivity Analysis}\label{sec:sensitivity}
+
+Suppose $f$ is differentiable once on its domain.\footnote{An example of a function that is differentiable once but not twice on $\mathbb R$ is $f(x) = x |x |$.}
+Analogously to Section \ref{sec:change_time_discrete}, Equation \eqref{eq:nabla} in particular, we can analyse the instantaneous change of $f$ with respect to the underlying variables $x_j$,
+\begin{equation}\label{eq:derivative}
+d_{tj}
+= 
+\begin{dcases*}
+0 & when $\tilde{d}_{tk} = 0$ for all $k \in \{1, \ldots, m\}$ \\
+\frac{ \left| \tilde{d}_{tj} \right| }{ \sum_{k=1}^m \left| \tilde{d}_{tk} \right| } & when $\tilde{d}_{tk} \neq 0$ for at least one $k \in \{1, \ldots, m\}$
+\end{dcases*}
+\end{equation}
+with $\begin{displaystyle} \left. \tilde{d}_{tj} = \frac{\partial}{\partial x_j} f(x_1, \ldots, x_m) \right|_{x_1 = \bm{X}_{t1}, \ldots, x_m = \bm{X}_{tm}}\end{displaystyle}$.
+As with Equation \eqref{eq:nabla}, the $\tilde{d}_k$ need to be normalised to enable comparison of $\tilde{d}_k$ over time.
+
+In the example of Section \ref{sec:aoc} the derivative of the income with respect to revenue (costs) is $1$ ($-1$) and therefore $d_{tj} = \tfrac{1}{2}$ for all $t$ and $j$.
+A more interesting example of a mapping $f$ would be when $d_{tj}$ is not a constant for all $t$ and $j$.
+
+\quad
+\fbox{
+ \begin{minipage}{\dimexpr\textwidth-4\fboxsep-2\fboxrule\relax}
+  \textbf{Example} \\
+Let $f \colon \mathbb{R} \times \mathbb{R}_+ \mapsto \mathbb{R}$ and take $\bm{y}$ to be the income per annual working unit, $\bm{x}_1$ the income as before, and $\bm{x}_2$ the number of annual working units (awu), i.e. $f(x_1, x_2) = x_1 \slash x_2$.
+Furthermore, let $T = `r nObservations`$ and the number of awu is sampled from $\displaystyle 1 + 
+\frac{2}{ 1 + \exp(a) }$ with $a \sim \mathcal{N}(0, 1)$.
+See Figure \ref{fig:sensitivity_example_derivative} for a visualisation of the number of the income per awu for different values of income and the number of awu.
+See Figure \ref{fig:decomposition_example_sensitivity} for a visualisation over time of the income per awu (upper panel) and its decomposition into income and the number of awu (lower panel).
+Working out the mathematics of Equation \eqref{eq:derivative} yields
+\[
+\tilde{d}_{t,1} = \frac{1}{\bm{X}_{t,2}}
+\quad \text{and} \quad
+\tilde{d}_{t,2} = -\frac{\bm{X}_{t,1}}{\bm{X}_{t,2}^2}
+\]
+leading to
+\begin{equation}\label{eq:derivative_example_2}
+d_{t,1} 
+= \frac{ \left| \frac{1}{\bm{X}_{t,2}} \right| }{ \left| \frac{1}{\bm{X}_{t,2}} \right| + \left|
+\frac{\bm{X}_{t,1}}{\bm{X}_{t,2}^2} \right| }
+= \frac{ \bm{X}_{t,2} }{ \bm{X}_{t,2} + \bm{X}_{t,1} }
+\quad \text{and} \quad
+d_{t,2} 
+= \frac{ \left| \frac{\bm{X}_{t,1}}{\bm{X}_{t,2}^2} \right| }{ \left| \frac{1}{\bm{X}_{t,2}} \right| + \left| \frac{\bm{X}_{t,1}}{\bm{X}_{t,2}^2} \right| }
+= \frac{ \bm{X}_{t,1} }{ \bm{X}_{t,2} + \bm{X}_{t,1} }
+\end{equation}
+Note the absence of the absolute signs as all values of income and the number of awu are strictly positive.
+
+As becomes apparent from Figure \ref{fig:decomposition_example_sensitivity}, the sensitivity is mostly determined by the variable the number of awu. 
+Intuitively this can be explained by the observation that income per awu is more sensitive to a change in the number of awu than a change in income since the division by the number of awu has more impact than the multiplication by income.
+More mathematically, an infinite small change in the number of awu has a larger impact on the income per awu compared to an infinite small change in income.
+This follows from the observation that the number of awu resides in the interval `r paste( '$[', paste( format( range(dataObserved$awu), digits = 2 ), collapse = ', ' ), ']$' )` while income resides in the interval `r paste( '$[', paste( format( range(dataObserved$income), digits = 2 ), collapse = ', ' ), ']$' )`.
+Since $d_{t,1}$ and $d_{t,2}$ have the same denominator, the $d_{tj}$ with the largest absolute value of the numerator is by definition the largest sensitivity factor.
+ \end{minipage}
+} \ \
+
+```{r fig.height = 6, fig.cap = '\\label{fig:sensitivity_example_derivative}\\small Visualisation of the income per awu and its decomposition into income and the number of awu. The sensitivity is maximal for a high income and a low number of awu. That is partially because, when the number of awu is low, an increase in the number of awu for a certain income leads to a much larger decrease in income per awu compared to the same change in the number of awu when the number of awu is higher. The other reason is that, for a given number of awu, a higher income has a larger effect on the income per awu compared to a lower income.'}
+nPlot <- 1e2
+numberAwu <- seq( min(dataObserved$awu), max(dataObserved$awu), length.out = nPlot)
+income <- seq( min(dataObserved$income), max(dataObserved$income), length.out = nPlot)
+incomePerAwu <-
+    matrix(NA,
+           nrow = length(numberAwu),
+           ncol = length(income))
+incomePerAwuDerivativeIncome <- incomePerAwu
+incomePerAwuDerivativeAwu <- incomePerAwu
+for (iAwu in 1:length(numberAwu)) {
+    for (iIncome in 1:length(income)) {
+        incomePerAwu[iAwu, iIncome] <-
+            income[iIncome] / numberAwu[iAwu]
+        incomePerAwuDerivativeIncome[iAwu, iIncome] <-
+          numberAwu[iIncome] / ( numberAwu[iAwu] + abs(income[iIncome]) )
+        incomePerAwuDerivativeAwu[iAwu, iIncome] <-
+          abs(income[iIncome]) / ( numberAwu[iAwu] + abs(income[iIncome]) )
+    }
+}
+p <- plot_ly(
+    x = ~ income,
+    y = ~ numberAwu,
+    z = ~ incomePerAwu
+) %>%
+    add_surface() %>%
+    layout(scene = list(
+        xaxis = list(title = 'income'),
+        yaxis = list(title = 'awu'),
+        zaxis = list(title = 'income per awu')
+    ))
+incomeAndNumberAwu <- mesh(income, numberAwu)
+scatter3D(incomeAndNumberAwu$x, incomeAndNumberAwu$y, incomeAndNumberAwu$x / incomeAndNumberAwu$y, xlab = 'income', ylab = 'awu', zlab = 'income per awu')
+```
+
+```{r fig.height = 6, fig.cap = paste0('\\label{fig:decomposition_example_sensitivity}\\small Visualisation of the income per awu and its decomposition into income and the number of awu (upper panel) and a visualisation of the sensitivity with respect to income and the number of awu (lower panel). Both panels are for the time window ', min(dataObserved$year), ' - ', max(dataObserved$year), '. Sensitivity is $d_{tj}$ from Equation \\eqref{eq:derivative_example_2}.')}
+dataObserved <- dataObserved %>% mutate(`income per awu` = income / awu, `derivative w.r.t. income` = 1 / awu, `derivative w.r.t. awu` = -income / awu^2, `sensitivity w.r.t. income` = abs(`derivative w.r.t. income`) / ( abs(`derivative w.r.t. income`) + abs(`derivative w.r.t. awu`) ), `sensitivity w.r.t. awu` = abs(`derivative w.r.t. awu`) / ( abs(`derivative w.r.t. income`) + abs(`derivative w.r.t. awu`) ) )
+
+dataPlotMelted <- dataObserved %>% melt(id.vars = 'year', measure.vars = c('income per awu', 'income', 'awu'))
+fhDecompositionExample <- ggplot(dataPlotMelted, aes(x = year, y = value, colour = variable)) + geom_line(size = 1) + geom_point() + theme_bw() + theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+thisColours <- unique(ggplot_build(fhDecompositionExample)$data[[1]]$colour)
+# dataPlotImpact <- dataObserved %>% mutate(year = factor(year), income = income, costs = changeIncomeExplainedByCosts) %>% melt(id.vars = 'year', measure.vars = c('revenue', 'costs'), value.name = 'impact')
+# fhDecompositionExampleImpact <- ggplot(dataPlotImpact, aes(x = year, y = impact, fill = variable)) + geom_bar(position = 'fill', stat = 'identity') +  scale_y_continuous(labels = scales::percent_format()) + ylab('impact') + scale_fill_manual('variable', values = c('income' = thisColours[1], 'awu' = thisColours[2])) + theme_bw()
+
+dataPlotSensitivity <- dataObserved %>% mutate(year = factor(year), income = `sensitivity w.r.t. income`, awu = `sensitivity w.r.t. awu`) %>% melt(id.vars = 'year', measure.vars = c('income', 'awu'), value.name = 'sensitivity')
+fhDecompositionExampleSensitivity <- ggplot(dataPlotSensitivity, aes(x = year, y = sensitivity, fill = variable)) + geom_bar(position = 'fill', stat = 'identity') +  scale_y_continuous(labels = scales::percent_format()) + ylab('sensitivity') + scale_fill_manual('variable', values = c('income' = thisColours[2], 'awu' = thisColours[3])) + theme_bw()
+
+suppressWarnings(plot_grid(fhDecompositionExample + xlab(''), fhDecompositionExampleSensitivity, ncol = 1, align = 'v')) # to omit the warning that 2 rows are removed as the first year has no value
+```
+
+\todo{\small Misschien ook nog richting per onderliggende variabele aangeven? JR: ja, als optie in de interactieve applicatie.}
+
+
+
+
+\subsubsection{Change With Respect to Groups}
+
+Suppose $\bm y$ is given for a group.
+In general, when categorical variable $\bm{x}_j$ has $c \in \mathbb{N}$ categories with the value of category $\ell = 1, \ldots, c$ defined by $\bm{X}_{tj\ell}$ and $\bm{X}_{tj} = \displaystyle \sum_{\ell = 1}^c \bm{X}_{tj\ell}$.
+Note that $d_{tj} = 1 \slash m$ for this type of variable.
+
+\quad
+\fbox{
+ \begin{minipage}{\dimexpr\textwidth-4\fboxsep-2\fboxrule\relax}
+  \textbf{Example} \\
+Let $\bm y$ be again the average annual income of farmers and $\bm y$ is given for different types of soil.
+More mathematically, the soil type is denoted in the $(n \times 1)$ vector $\bm x$ where $\bm{x}_t$ corresponds to $\bm{y}_t$ and $\bm{x}_t$ can take the values
+\[
+\{
+\text{bog},
+\text{clay},
+\text{loess},
+\text{sand}
+\}
+\]
+with the corresponding income for each soil type given by $\bm{y}_t^\text{bog}$, $\bm{y}_t^\text{clay}$, $\bm{y}_t^\text{loess}$, and $\bm{y}_t^\text{sand}$, respectively.
+Furthermore, 
+\[
+\bm{y}_t^\text{bog} \geq 0, \quad \bm{y}_t^\text{clay} \geq 0, \quad \bm{y}_t^\text{loess} \geq 0, \quad \bm{y}_t^\text{sand} \geq 0,
+\quad
+\bm{y}_t = \bm{y}_t^\text{bog} + \bm{y}_t^\text{clay} + \bm{y}_t^\text{loess} + \bm{y}_t^\text{sand}
+\]
+Then the following mapping in conjunction with Equations \eqref{eq:nabla} and \eqref{eq:derivative} can be used to analyse the change in $\bm{y}_t$ with respect to the change in the underlying variables $\bm{y}_t^\text{bog}$, $\bm{y}_t^\text{clay}$, $\bm{y}_t^\text{loess}$, and $\bm{y}_t^\text{sand}$:
+\[
+f(x_1, x_2, x_3, x_4) = x_1 + x_2 + x_3 + x_4
+\quad \text{with} \quad
+x_1 = \bm{y}_t^\text{bog}, \quad x_2 = \bm{y}_t^\text{clay}, \quad x_3 = \bm{y}_t^\text{loess}, \quad x_4 = \bm{y}_t^\text{sand}
+\]
+ \end{minipage}
+} \ \
+
+
+
+\subsection{Variance Decomposistion Analysis}\label{sec:var}
+
+Up to now we only considered a time series for a single entity, e.g. a single farm. 
+When the time series of multiple entities are aggregated into a single time series, dispersion among the measured variable could arise.
+For example, income is likely to be different over time for different farmers.
+The corresponding variance can be decomposed into the variance of the underlying variables.
+More formally, for $n \geq 1$ entities, the variable to be decomposed $\bm{Y} \in \mathbb{R}^{nT}$ is now of length $nT$ instead of $T$ as before.\footnote{Note that we implicitly assume that the dependent variable $\bm y$ is observed for each period $t$ and each entity $i$. Whether or not this assumption is applicable, is not of relevance for the analysis in this section.}
+In other words, $\bm Y$ is the $(nT \times 1)$ vector of stacked values of the dependent variable $\bm y$ for each entity.
+Suppose entity $i$ has $\bm y$ as dependent variable, then at time $t$ the corresponding element of $\bm Y$ is $\bm{Y}_{T (i - 1) + t}$.
+
+The aggregation of $\bm{Y}$ in period $t$ is defined to be a weighted average of the associated values for the entities, i.e. $\displaystyle \bm{y}_t = \sum_{i=1}^n \bm{W}_{T (i - 1) + t} \bm{Y}_{T (i - 1) + t}$ with weight $\bm{W}_{T (i - 1) + t} \in [0, 1]$ and, for all $t$, $\bm{W}_{T (i - 1) + t} > 0$ for at least one $i$.
+As with $\bm Y$, for entity $i$ at time $t$ the corresponding element of $\bm W$ is $\bm{W}_{T (i - 1) + t}$.
+
+As the underlying variables $\bm{x}_1, \ldots, \bm{x}_m$ could exhibit dispersion they become random variables relative to the information set $\{ \bm{y}, \bm{x}_1, \ldots, \bm{x}_m \}$ and are denoted by, respectively, $X_1, \ldots, X_m$.
+The variance of $f(X_1, \ldots, X_m)$ can be decomposed into the variances of $X_1, \ldots, X_m$ as follows.
+For now we assume that $f$ is an affine mapping, i.e. $f$ is defined as in Equation \eqref{eq:f_affine}.
+Then 
+\[
+\text{Var}(f)
+=
+\sum_{j=1}^m a_j^2 \text{Var}(X_j) + 2 \sum_{k=1, k \neq j}^m a_j a_k \text{Cov}(X_j, X_k)
+\]
+with $\text{Var}(X)$ the variance of the random variable $X$,
+\begin{equation}\label{eq:var}
+\text{Var}(X) = \mathbb{E} \left[(X - \mathbb{E}[X])^2 \right]
+\end{equation}
+and $\text{Cov}(X, Y)$ the covariance between $X$ and $Y$,
+\begin{equation}\label{eq:cov}
+\text{Cov}(X, Y) = \mathbb{E} [ (X - \mathbb{E}[X]) (Y - \mathbb{E}[Y]) ]
+\end{equation}
+Let 
+\[
+\tilde{v}_k
+=
+a_k^2 \text{Var}(X_k) + \sum_{k=1, k \neq j}^m a_j a_k \text{Cov}(X_j, X_k)
+\]
+and
+\[
+v_k
+=
+\begin{dcases*}
+0 & when $\tilde{v}_k = 0$ for all $k \in \{1, \ldots, m\}$ \\
+\frac{ \left| \tilde{v}_k \right| }{ \sum_{k=1}^m \left| \tilde{v}_k \right| } & when $\tilde{v}_k \neq 0$ for at least one $k \in \{1, \ldots, m\}$
+\end{dcases*}
+\]
+When desired, one could break up $v_k$ into the variance and the covariance part,
+\[
+\tilde{v}_k^\text{Var} = a_k^2 \text{Var}(X_k)
+\quad \text{and} \quad
+\tilde{v}_k^\text{Cov} = \sum_{k=1, k \neq j}^m a_j a_k \text{Cov}(X_j, X_k)
+\]
+leading to
+\[
+v_k^\text{Var}
+=
+\begin{dcases*}
+0 & when $\tilde{v}_k^\text{Var} = 0$ and $\tilde{v}_k^\text{Cov} = 0$ for all $k \in \{1, \ldots, m\}$ \\
+\frac{ \left| \tilde{v}_k^\text{Var} \right| }{ \sum_{k=1}^m \left| \tilde{v}_k^\text{Var} \right| + \left| \tilde{v}_k^\text{Cov} \right| } & when $\tilde{v}_k^\text{Var} \neq 0$ or $\tilde{v}_k^\text{Cov} \neq 0$ for at least one $k \in \{1, \ldots, m\}$
+\end{dcases*}
+\]
+and
+\[
+v_k^\text{Cov}
+=
+\begin{dcases*}
+0 & when $\tilde{v}_k^\text{Var} = 0$ and $\tilde{v}_k^\text{Cov} = 0$ for all $k \in \{1, \ldots, m\}$ \\
+\frac{ \left| \tilde{v}_k^\text{Cov} \right| }{ \sum_{k=1}^m \left| \tilde{v}_k^\text{Var} \right| + \left| \tilde{v}_k^\text{Cov} \right| } & when $\tilde{v}_k^\text{Var} \neq 0$ or $\tilde{v}_k^\text{Cov} \neq 0$ for at least one $k \in \{1, \ldots, m\}$
+\end{dcases*}
+\]
+For more than one period $v_k$, $v_k^\text{Var}$, and $v_k^\text{Cov}$ become time-dependent and the dependency on time is denoted by, respectively, $v_{tk}$, $v_{tk}^\text{Var}$, and $v_{tk}^\text{Cov}$.
+As with Equation \eqref{eq:nabla}, the $\tilde{v}_{tk}$ (and $\tilde{v}_{tk}^\text{Var}$ and $\tilde{v}_{tk}^\text{Cov}$ when desired) need to be normalised to enable comparison of $\tilde{v}_{tk}$ over time.
+
+Apart from very specific data-generating processes \todo{\small referentie invoegen} the variance (Equation \eqref{eq:var}) and covariance (Equation \eqref{eq:cov}) can only be estimated from the observed values, i.e. for a random variable $X$ with $n \geq 2$ observed values $(X_1, \ldots, X_n)$, we have sample variance
+\[
+S_n = \frac{1}{n - 1} \sum_{i=1}^n \left( X_i - \bar{X} \right)^2,
+\quad
+\bar{X} = \frac{1}{n} \sum_{i=1}^n X_i
+\]
+and only for $n \to \infty$ we have that $S_n$ equals $\text{Var}(X)$.
+Since $n$ is finite we observe variance in $S_n$ as well. 
+That is,
+\[
+\text{Var}(S_n) = \frac{\mu^4}{n} - \frac{\sigma^4 (n - 3)}{n (n - 1)},
+\quad
+\mu^4 = \mathbb{E} \left[ (X - \mathbb{E}[X] )^4 \right]
+\]
+\todo{\small Kan ik nu de sample momenten nemen?}
+Similar for the covariance \todo{\small Wishart of https://stats.stackexchange.com/questions/287144/variance-of-a-sample-covariance-for-normal-variables?}
+
+```{r}
+coefficientsVars <- data.frame(A = 1, B = 2, C = -3)
+variances <- data.frame(A = 3, B = 2, C = 1)
+correlations <- data.frame(AB = 0.5, AC = -0.2, BC = 0)
+v_A_Var_tilde <- coefficientsVars$A^2 * variances$A
+v_A_Cov_tilde <- coefficientsVars$A * coefficientsVars$B * correlations$AB * sqrt(variances$A * variances$B) + coefficientsVars$A * coefficientsVars$C * correlations$AC * sqrt(variances$A * variances$C)
+v_A_tilde <- v_A_Var_tilde + v_A_Cov_tilde
+v_B_Var_tilde <- coefficientsVars$B^2 * variances$B
+v_B_Cov_tilde <- coefficientsVars$A * coefficientsVars$B * correlations$AB * sqrt(variances$A * variances$B) + coefficientsVars$B * coefficientsVars$C * correlations$BC * sqrt(variances$B * variances$C)
+v_B_tilde <- v_B_Var_tilde + v_B_Cov_tilde
+v_C_Var_tilde <- coefficientsVars$C^2 * variances$C
+v_C_Cov_tilde <- coefficientsVars$A * coefficientsVars$C * correlations$AC * sqrt(variances$A * variances$C) + coefficientsVars$B * coefficientsVars$C * correlations$BC * sqrt(variances$B * variances$C)
+v_C_tilde <- v_C_Var_tilde + v_C_Cov_tilde
+sum_v <- abs(v_A_tilde) + abs(v_B_tilde) + abs(v_C_tilde)
+sum_v_var_cov <- abs(v_A_Var_tilde) + abs(v_B_Var_tilde) + abs(v_C_Var_tilde) + abs(v_A_Cov_tilde) + abs(v_B_Cov_tilde) + abs(v_C_Cov_tilde)
+```
+
+
+\quad
+\fbox{
+ \begin{minipage}{\dimexpr\textwidth-4\fboxsep-2\fboxrule\relax}
+  \textbf{Example} \\
+Suppose we have as dependent variable the annual income of a group of farmers.
+$f$ is defined as $f(A, B, C) = A + 2 B - 3 C$ with $A \sim \mathcal{N} \left( \mu_A, \sigma_A^2 \right)$ the income of product $A$, $B \sim \mathcal{N} \left(\mu_B, \sigma_B^2 \right)$ the income of product $B$ which is doubled because of government subsidies, and $C \sim \mathcal{N} \left(\mu_C, \sigma_C^2 \right)$ the net investments not depending on $A$ and $B$.
+The correlation between products $X$ and $Y$ is denoted by $\rho_{XY} \in [-1, 1]$ for $X \in \{ A, B, C \}$ and $Y \in \{ A, B, C \}$.
+For $A$, $B$, and $C$ the variances are $(\sigma_A^2, \sigma_B^2, \sigma_C^2) = (`r variances$A`, `r variances$B`, `r variances$C`)$ and the correlations are $(\rho_{AB}, \rho_{AC}, \rho_{BC}) = (`r correlations$AB`, `r correlations$AC`, `r correlations$BC`)$.
+Then, for $k \in \{A, B, C\}$,
+\[
+\text{Var}(f)
+=
+a_A^2 \sigma_A^2 + a_B^2 \sigma_B^2 + a_C^2 \sigma_C^2 + 2 a_A a_B \rho_{AB} \sigma_A \sigma_B + 2 a_A a_B \rho_{AC} \sigma_A \sigma_C + 2 a_B a_C \rho_{BC} \sigma_B \sigma_C
+=
+`r v_A_Var_tilde + v_B_Var_tilde + v_C_Var_tilde + v_A_Cov_tilde + v_B_Cov_tilde + v_C_Cov_tilde`
+\]
+with $(a_A, a_B, a_C) = (`r coefficientsVars$A`, `r coefficientsVars$B`, `r coefficientsVars$C`)$.
+The variance of $f$ decomposed into the variances of $A$, $B$, and $C$ is given by
+\[
+v_A = `r v_A_tilde / sum_v`,
+\quad
+v_B = `r v_B_tilde / sum_v`,
+\quad
+v_C = `r v_C_tilde / sum_v`
+\]
+Indeed, as required, $v_A + v_B + v_C = 1$.
+Although $C$ has a larger variance contribution to $\text{Var}(f)$ then $B$ ($a_C^2 \sigma_C^2 = `r coefficientsVars$C^2 * variances$C`$ vs. $a_B^2 \sigma_B^2 = `r coefficientsVars$B^2 * variances$B`$), its overall share is smaller as $A$ and $C$ are negatively correlated while $A$ and $B$ are positively correlated.
+The consequence is that $a_A a_B \rho_{AC} \sigma_A \sigma_C$ is negative implying a smaller $v_C$ while $a_A a_B \rho_{AB} \sigma_A \sigma_B$ is positive implying a larger $v_B$.
+When such effects need to be analysed as well, we need the decomposition of $v_k$ into $v_k^\text{Var}$ and $v_k^\text{Cov}$:
+\[
+v_A^\text{Var} = `r v_A_Var_tilde / sum_v_var_cov`,
+\
+v_A^\text{Cov} = `r v_A_Cov_tilde / sum_v_var_cov`,
+\
+v_B^\text{Var} = `r v_B_Var_tilde / sum_v_var_cov`,
+\
+v_B^\text{Cov} = `r v_B_Cov_tilde / sum_v_var_cov`,
+\
+v_C^\text{Var} = `r v_C_Var_tilde / sum_v_var_cov`,
+\
+v_C^\text{Cov} = `r v_C_Cov_tilde / sum_v_var_cov`
+\]
+Note that $\mu_A$, $\mu_B$, and $\mu_C$ do not play a role in this variance decomposition.
+\end{minipage}
+} \ \
+
+
+\subsubsection{(Experimental) Alternative decomposition: derivative}
+
+Let 
+\[
+\tilde{v}_k
+=
+\frac{ \partial \text{Var} \big( f(X_1, \ldots, X_m) \big) }{ \partial \text{Var}(X_k) }
+\]
+
+```{r}
+nPlot <- 1e2
+varA <- 2
+varB <- 1
+rho <- 0.0
+varAPlot <- unique( sort( c( varA, varA * seq(0.5, 1.5, length.out = nPlot) ) ) )
+varBPlot <- unique( sort( c( varB, varB * seq(0.5, 1.5, length.out = nPlot) ) ) )
+dataPlotA <- data.frame(`variance of` = 'A',
+                       variance = varAPlot,
+                       x = 1:length(varAPlot),
+                       check.names = FALSE) %>%
+                       mutate(`variance of A + B` = variance + varB + 2 * rho * sqrt(variance * varB))
+dataPlotB <- data.frame(`variance of` = 'B',
+                        x = 1:length(varBPlot),
+                       variance = varBPlot,
+                       check.names = FALSE) %>%
+                       mutate(`variance of A + B` = varA + variance + 2 * rho * sqrt(varA * variance))
+dataPlot <- rbind(dataPlotA, dataPlotB)
+```
+
+```{r fig.height = 6, fig.cap = paste0('\\label{fig:decomposition_example_variance}\\small Visualisation of the breakdown of the variance of the income into the variance of the fixed income ($A$) and the variance of the variable income ($B$).')}
+ggplot(dataPlot, aes(x = x, y = `variance of A + B`, colour = `variance of`)) +
+    geom_line(size = 1) +
+    labs(x = 'variance of A and B',
+         y = 'variance of A + B',
+         title = 'variance of A + B decomposed into the variances of A and B') + 
+    #scale_x_continuous(sec.axis = sec_axis(~ . diff(range(varAPlot)) / length(varAPlot) ) ) +
+    scale_color_discrete(labels = unname( latex2exp::TeX( c( paste( 'A given $\\sigma_B^2$ =', varB ), paste('B given $\\sigma_A^2$ =', varA) ) ) ) ) +
+    theme_bw()
+```
+
+\quad
+\fbox{
+ \begin{minipage}{\dimexpr\textwidth-4\fboxsep-2\fboxrule\relax}
+  \textbf{Example} \\
+Suppose we have as dependent variable the annual income of farmers.
+$f$ is defined as $f(A, B) = A + B$ with $A \sim \mathcal{N} \left( \mu_A, \sigma_A^2 \right)$ the fixed income and $B \sim \mathcal{N} \left(\mu_B, \sigma_B^2 \right)$ the variable income.
+The correlation between $A$ and $B$ is $\rho \in [-1, 1]$.
+Then 
+\[
+\text{Var}(f)
+=
+\sigma_A^2 + \sigma_B^2 + 2 \rho \sigma_A \sigma_B
+\]
+See Figure \ref{fig:decomposition_example_variance} for a visualisation of the income and its decomposition into revenue and costs for a certain choice of $\sigma_A^2 = `r varA`$, $\sigma_B^2 = `r varB`$, and $\rho = `r rho`$. 
+Note that $\mu_A$ and $\mu_B$ do not play a role in the variance decomposition.
+The variance of $f$ decomposed into the variances of $A$ $\left( \sigma_A^2 \right)$ and $B$ $\left( \sigma_B^2 \right)$ are given by
+\[
+v_1 = v_A = \frac{ \left| 1 + \rho \frac{\sigma_B}{\sigma_A} \right| }{ \left| 1 + \rho \frac{\sigma_B}{\sigma_A} \right| + \left| 1 + \rho \frac{\sigma_A}{\sigma_B} \right| }
+\quad \text{and} \quad
+v_2 = v_B = \frac{ \left| 1 + \rho \frac{\sigma_A}{\sigma_B} \right| }{ \left| 1 + \rho \frac{\sigma_B}{\sigma_A} \right| + \left| 1 + \rho \frac{\sigma_A}{\sigma_B} \right| }
+\]
+ \end{minipage}
+} \ \
+
+
+The justification for taking the derivative is the following.\todo{\small Probleem met $A + B$ want met $\rho = 0$ is de afgeleide 1 en dus gelijk voor $A$ en $B$.}
+
+\todo{see also https://quant.stackexchange.com/questions/49414/what-does-first-order-effect-mean for the first order effect}
+
+Let $g(\sigma_X^2, \sigma_Y^2)$ be the variance of the function $f(X, Y) = X + Y$ with variances of $X$ and $Y$ denoted by, respectively, $\sigma_X^2$ and $\sigma_Y^2$.
+Now
+\[
+\text{Var}(f) = \sigma_X^2 + \sigma_Y^2 + 2 \rho \sigma_X \sigma_Y,
+\quad
+\rho \in [-1, 1]
+\]
+For $\sigma_X = \sigma_Y$ the variance of $f$ equals $2 \sigma_X^2 (1 + \rho)$ and the contribution to the $\text{Var}(f)$ of $X$ and $Y$ is the same:
+\[
+v_X = \frac{ \tilde{v}_X }{ \tilde{v}_X + \tilde{v}_Y } = \frac{ \tilde{v}_X }{ \tilde{v}_X + \tilde{v}_X } = \frac{1}{2} = v_Y
+\]
+For $\rho = 0$ the variance of $f$ equals $\sigma_X^2 + \sigma_Y^2$ and the contribution to the $\text{Var}(f)$ of $X$ and $Y$ results in
+\[
+v_X = \frac{\sigma_X}{\sigma_X + \sigma_Y} \quad \text{and} \quad v_Y = \frac{\sigma_Y}{\sigma_X + \sigma_Y}
+\]
+For $\sigma_X \neq \sigma_Y$ and $\rho \neq 0$ we proceed as follows.
+The Taylor approximation of $\text{Var}(f)$ in \textit{only} $\sigma_X^2$ around $\sigma_X^2 = \sigma_0^2$, for $\sigma_0^2 > 0$, is given by
+\[
+\tilde{v}_X
+= g \left( \sigma_X^2, \sigma_Y^2 \right)
+= \sigma_0^2 + \sigma_Y^2 + 2 \rho \sigma_0 \sigma_Y
++ \left( \sigma_X^2 - \sigma_0^2 \right) \left( 1 + \rho \frac{\sigma_Y}{\sigma_0} \right)
++ \frac{ \left( \sigma_X^2 - \sigma_0^2 \right)^2 }{2} \left( 1 - \frac{\rho}{2} \frac{\sigma_Y}{\sigma_0^{3 \slash 2}} \right)
++ \ldots
+\]
+Written out this yields
+\[
+\tilde{v}_X
+= g \left( \sigma_X^2, \sigma_Y^2 \right)
+= \sigma_0^2 + \sigma_Y^2 + 2 \rho \sigma_0 \sigma_Y
++
+\sum_{j=1}^k \frac{ \left( \sigma_X^2 - \sigma_0^2 \right)^j }{j!} \left( (-)^{j + 1} \alpha_j \frac{\sigma_Y}{\sigma_0^{\beta_j}} + 1 \right)
+\]
+with, for $j = 1, \ldots, k$, $\beta_0 = 0$, $\beta_j = \beta_{j-1} + 1$, $\alpha_0 = 1$, $\alpha_j = \beta_{j-1} \alpha_{j-1}$.
+The restriction $\sigma_0^2 > 0$ is required because $g$ needs to be differentiable at $\sigma_0^2$, which is only the case for $\sigma_0^2 > 0$ as $g$ is not defined on the real line for $\sigma_0^2 < 0$.
+
+For $\sigma_0^2 = \sigma_Y^2$ we have
+\[
+\text{Var}(f)
+= g \left( \sigma_X^2, \sigma_Y^2 \right)
+= 2 \sigma_Y^2 (1 + \rho)
++ \left( \sigma_X^2 - \sigma_Y^2 \right) \left( 1 + \rho \frac{\sigma_X}{\sigma_Y} \right)
++ \frac{ \left( \sigma_X^2 - \sigma_Y^2 \right)^2 }{2} \left( 1 - \frac{\rho}{2} \frac{\sigma_X}{\sigma_Y^2} \right)
++ \ldots
+\]
+
+
+
+\newpage\section{Automated Breakdown}
+
+Given the analyses results of Section \ref{sec:aoc}, Section \ref{sec:sensitivity}, and Section \ref{sec:var}, we can automatically suggest the next (underlying) variable to be analysed.
+More formally, for a dependent variable $\bm y$ and underlying variables $\bm{x}_1, \ldots, \bm{x}_m$ we have the impact $\nabla_{tj}$ starting from the second period, the sensitivity $d_{tj}$ starting from the first period, and variance decomposition $v_{tk}$ starting from the first period.
+
+\begin{tabular}{llll}
+  \toprule
+                        & $d_{tj}$ is low & & $d_{tj}$ is high \\
+                          \cmidrule{2-2}      \cmidrule{4-4}
+  $\nabla_{tj}$ is low  &                 & & \\
+  $\nabla_{tj}$ is high &                 & & \\
+  \bottomrule
+\end{tabular}
+
+
+\newpage\section{Case Study}
+
+
+
+\newpage\section{Implementation}
+
+\newpage\section{Conclusion and Recommendations}
